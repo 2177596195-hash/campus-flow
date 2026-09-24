@@ -12,6 +12,9 @@ env/
 .idea/
 .vscode/
 
+# Agent 工作区数据（记忆、技能等本地数据，不入库）
+.workbuddy/
+
 # Environment variables
 .env
 .env.*
@@ -30,3 +33,6 @@ Thumbs.db
 # Local data
 *.db
 *.sqlite3
+
+# 向量库本地持久化目录（可由 python main.py --ingest 重建）
+.storage/

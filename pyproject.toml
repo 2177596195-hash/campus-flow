@@ -1,5 +1,28 @@
 [project]
 name = "campus-flow"
 version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = []
+description = "智校园 CampusFlow —— 基于 LangGraph + MCP 的高校智能事务 Agent 平台"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "langchain>=1.4,<2.0",
+    "langchain-chroma>=1.1.0",
+    "langchain-core>=1.6,<2.0",
+    "langchain-openai>=1.6,<2.0",
+    "langchain-text-splitters>=1.1.2",
+    "langgraph>=1.2,<2.0",
+    "pypdf>=6.19.0",
+    "python-dotenv>=1.2,<2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["campus-agent/tests"]
+pythonpath = ["campus-agent"]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
