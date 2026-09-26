@@ -83,7 +83,12 @@ export const useConversationStore = defineStore('conversation', () => {
   }
 
   /** 添加一条消息；没有当前会话时自动开一个 */
-  function addMessage(role: MessageRole, content: string, mock = false): ChatMessage {
+  function addMessage(
+    role: MessageRole,
+    content: string,
+    mock = false,
+    error = false,
+  ): ChatMessage {
     const conversation = upsertCurrentConversation()
     const message: ChatMessage = {
       id: createId(),
@@ -91,6 +96,7 @@ export const useConversationStore = defineStore('conversation', () => {
       content,
       createdAt: Date.now(),
       ...(mock ? { mock: true } : {}),
+      ...(error ? { error: true } : {}),
     }
 
     conversation.messages.push(message)
@@ -102,6 +108,18 @@ export const useConversationStore = defineStore('conversation', () => {
     }
 
     return message
+  }
+
+  /**
+   * 直接追加一条**已经构造好**的消息。
+   *
+   * 存在的理由：真实请求（如考试查询）的结果来自 async 编排层，
+   * 那里已经确定了 role / content / 标记位，不希望再按位置参数一个个往下传
+   * （`addMessage(role, content, mock, error)` 一旦再加标记就会失控）。
+   * 仍然复用同一套「自动开会话 + 首条用户消息定标题」逻辑，行为与 `addMessage` 一致。
+   */
+  function appendMessage(message: Pick<ChatMessage, 'role' | 'content' | 'mock' | 'error'>): ChatMessage {
+    return addMessage(message.role, message.content, message.mock ?? false, message.error ?? false)
   }
 
   /** 切换当前会话（不存在的 id 直接忽略） */
@@ -148,6 +166,7 @@ export const useConversationStore = defineStore('conversation', () => {
     conversationCount,
     createConversation,
     addMessage,
+    appendMessage,
     selectConversation,
     removeConversation,
     clearCurrentConversation,

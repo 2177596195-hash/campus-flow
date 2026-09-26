@@ -18,6 +18,11 @@ export interface ChatMessage {
   createdAt: number
   /** 本地占位回复标记（本阶段 mock 来源，接入真实 Agent 前用于 UI 提示） */
   mock?: boolean
+  /**
+   * 失败标记：本条 assistant 消息是「查询失败」提示，而不是业务回答。
+   * 与 `mock` 分开，是为了让界面能区分「占位内容」和「真实请求没成功」两种情况。
+   */
+  error?: boolean
 }
 
 /** 一个会话 */

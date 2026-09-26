@@ -4,3 +4,5 @@
  */
 export type { ApiResponse, PageQuery, PageResult } from './api'
 export type { ChatMessage, Conversation, MessageRole } from './conversation'
+// 考试安排：字段逐字对照后端 DTO，见 `./exam` 顶部注释
+export type { ExamApiErrorKind, ExamQuery, ExamSchedule } from './exam'

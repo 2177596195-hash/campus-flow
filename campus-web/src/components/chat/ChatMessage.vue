@@ -12,6 +12,8 @@ const props = defineProps<{
   content: string
   /** 本地占位回复标记 */
   mock?: boolean
+  /** 查询失败提示标记（真实请求未成功，不是业务回答） */
+  error?: boolean
   /** 助手正在生成（本阶段用于展示占位状态） */
   pending?: boolean
 }>()
@@ -26,7 +28,9 @@ const roleLabel = props.role === 'user' ? '我' : 'CampusFlow'
     <div class="msg__body">
       <header class="msg__head">
         <span class="msg__name">{{ roleLabel }}</span>
-        <span v-if="props.mock" class="msg__tag">占位</span>
+        <!-- 失败标记优先于占位标记：一条消息不可能同时是「真实请求失败」和「本地占位」 -->
+        <span v-if="props.error" class="msg__tag msg__tag--error">失败</span>
+        <span v-else-if="props.mock" class="msg__tag">占位</span>
       </header>
 
       <div v-if="props.pending" class="msg__typing" aria-label="正在生成">
@@ -104,6 +108,12 @@ const roleLabel = props.role === 'user' ? '我' : 'CampusFlow'
   font-size: 0.625rem;
   line-height: 1.5;
   color: var(--cf-text-subtle);
+}
+
+/* 失败标记用红色描边区分（沿用站点调色板，不引入新的设计与组件库） */
+.msg__tag--error {
+  color: #b3261e;
+  border-color: #e8a09a;
 }
 
 .msg__text {
