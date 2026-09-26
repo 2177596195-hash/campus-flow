@@ -2,14 +2,18 @@
 /**
  * 聊天主页：侧边栏 + 消息区 + 输入区。
  *
- * F3 起数据流分成两条（保持 F2 的组件拆分与 store 结构不变）：
- *   1. **考试安排**（真实链路）：
+ * F3 起数据流分成三条（保持 F2 的组件拆分与 store 结构不变）：
+ *   1. **考试安排**（真实链路，F3-1）：
  *      发送 → store 写入 user 消息 → 调用 Spring Boot `GET /api/exams`
  *      → 真实返回数据写入 assistant 消息；失败则写入明确的失败提示，绝不编造数据。
- *   2. 其它问题（仍是本地占位）：
+ *   2. **课程表**（真实链路，F3-2）：
+ *      发送 → store 写入 user 消息 → 从输入抽取周次（「查看第3周课程」→ 3；
+ *      抽不到 = 未指定，查整学期）→ 调用 Spring Boot `GET /api/courses`
+ *      → 真实返回数据写入 assistant 消息；失败同样只写明确提示。
+ *   3. 其它问题（仍是本地占位）：
  *      发送 → store 写入 user 消息 → 本地占位回复写入 assistant 消息（标注「占位」）。
  *
- * 这里是「页面编排」层：布局、窄屏抽屉、发送流程、两条分支的分流、滚动跟随。
+ * 这里是「页面编排」层：布局、窄屏抽屉、发送流程、三条分支的分流、滚动跟随。
  */
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -18,7 +22,13 @@ import AppSidebar from '@/components/sidebar/AppSidebar.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
 import WelcomePanel from '@/components/chat/WelcomePanel.vue'
+import { isCourseQuery, parseCourseWeek } from '@/constants/courseIntent'
 import { isExamQuery } from '@/constants/examIntent'
+import {
+  runCourseQuery,
+  shouldRenderReply as shouldRenderCourseReply,
+  toAssistantMessage as toCourseAssistantMessage,
+} from '@/lib/courseFlow'
 import { shouldRenderReply, toAssistantMessage } from '@/lib/examFlow'
 import { runExamQuery } from '@/lib/examFlow'
 import { MOCK_REPLY_DELAY_MS, buildMockReply } from '@/lib/mockReply'
@@ -103,6 +113,40 @@ function replyWithExams() {
   })
 }
 
+/**
+ * 真实课程表查询。
+ *
+ * 收尾机制与 `replyWithExams` 完全一致（观察 assistant 消息数量变化来解除
+ * pending，理由同上），差异只有两点：**入口带显式的周次参数**、
+ * 调用的是课程编排层。周次由 `handleSend` 从用户输入抽取后传入：
+ * 数字 = 只查该周，undefined = 整学期。
+ */
+function replyWithCourses(week: number | undefined) {
+  const controller = new AbortController()
+  inFlightController = controller
+
+  const beforeCount = conversationStore.messages.filter(
+    (message) => message.role === 'assistant',
+  ).length
+
+  const stopWatch = watch(
+    () =>
+      conversationStore.messages.filter((message) => message.role === 'assistant').length >
+      beforeCount,
+    (arrived) => {
+      if (!arrived) return
+      stopWatch()
+      pending.value = false
+      nextTick(() => inputRef.value?.focus())
+    },
+  )
+
+  void runCourseQuery(week, controller.signal).then((payload) => {
+    if (!shouldRenderCourseReply(payload)) return
+    conversationStore.appendMessage(toCourseAssistantMessage(payload))
+  })
+}
+
 function handleSend(text: string) {
   if (pending.value) return
 
@@ -111,6 +155,13 @@ function handleSend(text: string) {
 
   if (isExamQuery(text)) {
     replyWithExams()
+    return
+  }
+
+  // 课程问题：周次从输入里抽（「查看第3周课程」→ 3），抽不到就是整学期；
+  // 先判考试、再判课程，保证 F3-1 的考试分流行为分毫不改
+  if (isCourseQuery(text)) {
+    replyWithCourses(parseCourseWeek(text))
     return
   }
 
@@ -155,6 +206,7 @@ if (import.meta.env.DEV) {
   const debugTarget = window as unknown as Record<string, unknown>
   debugTarget.__campusFlowConversationStore = conversationStore
   debugTarget.__campusFlowExamQuery = runExamQuery
+  debugTarget.__campusFlowCourseQuery = runCourseQuery
 }
 </script>
 
