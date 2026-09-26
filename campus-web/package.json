@@ -1,0 +1,31 @@
+{
+  "name": "campus-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CampusFlow 智校园 AI Agent Web 前端",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --build && vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --build"
+  },
+  "dependencies": {
+    "axios": "^1.20.0",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.43",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "^22.0.6",
+    "@types/node": "^22.20.4",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/tsconfig": "^0.9.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.6",
+    "vue-tsc": "^3.3.11"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
