@@ -2,7 +2,7 @@
 /**
  * 聊天主页：侧边栏 + 消息区 + 输入区。
  *
- * F3 起数据流分成四条（保持 F2 的组件拆分与 store 结构不变）：
+ * F3 起数据流分成五条（保持 F2 的组件拆分与 store 结构不变）：
  *   1. **成绩**（真实链路，F3-3）：
  *      发送 → store 写入 user 消息 → 从输入解析学期（「2025-2026-1」或
  *      「2025-2026 第一学期」）；**没给学期就不发请求**，只回一句追问，
@@ -15,12 +15,16 @@
  *      发送 → store 写入 user 消息 → 从输入抽取周次（「查看第3周课程」→ 3；
  *      抽不到 = 未指定，查整学期）→ 调用 Spring Boot `GET /api/courses`
  *      → 真实返回数据写入 assistant 消息；失败同样只写明确提示。
- *   4. 其它问题（仍是本地占位）：
+ *   4. **请假申请**（真实链路，F3-4）：
+ *      发送 → store 写入 user 消息 → 从输入解析起止时间和事由；
+ *      **信息不全就不发请求**，按 startTime → endTime → reason 顺序追问，
+ *      等用户补齐后 → 调用 Spring Boot `POST /api/leaves` → 201 成功或明确失败。
+ *   5. 其它问题（仍是本地占位）：
  *      发送 → store 写入 user 消息 → 本地占位回复写入 assistant 消息（标注「占位」）。
  *
  * 分流顺序：**成绩在最前**——「考试成绩 / 期末成绩」里的「成绩 / 分数」
- * 指的是分数而非考场安排，必须进成绩分支；纯考试问题（考试安排 / 什么时候考）
- * 不含成绩词，F3-1 行为分毫不改。考试与课程分支的代码保持原样。
+ * 指的是分数而非考场安排，必须进成绩分支；请假在成绩之后、考试之前；
+ * 考试与课程分支的代码保持原样。
  *
  * 这里是「页面编排」层：布局、窄屏抽屉、发送流程、四条分支的分流、
  * 成绩学期槽位、滚动跟随。
@@ -34,6 +38,7 @@ import ChatMessage from '@/components/chat/ChatMessage.vue'
 import WelcomePanel from '@/components/chat/WelcomePanel.vue'
 import { isCourseQuery, parseCourseWeek } from '@/constants/courseIntent'
 import { isExamQuery } from '@/constants/examIntent'
+import { isLeaveQuery } from '@/constants/leaveIntent'
 import { isScoreQuery, parseSemester, wantsAllSemesters } from '@/constants/scoreIntent'
 import {
   runCourseQuery,
@@ -42,6 +47,15 @@ import {
 } from '@/lib/courseFlow'
 import { shouldRenderReply, toAssistantMessage } from '@/lib/examFlow'
 import { runExamQuery } from '@/lib/examFlow'
+import {
+  getLeaveFollowup,
+  isLeaveComplete,
+  parseLeaveInput,
+  shouldRenderReply as shouldRenderLeaveReply,
+  submitLeave,
+  toAssistantMessage as toLeaveAssistantMessage,
+} from '@/lib/leaveFlow'
+import type { LeaveCollectedData } from '@/types/leave'
 import { buildMockReply, MOCK_REPLY_DELAY_MS } from '@/lib/mockReply'
 import {
   runScoreQuery,
@@ -175,6 +189,14 @@ function replyWithCourses(week: number | undefined) {
 let pendingScoreSemester = false
 
 /**
+ * 请假流程的「任务槽位」：正在收集请假信息（startTime / endTime / reason）。
+ *
+ * 与成绩学期槽位同理：槽位只在本组件存活，影响 `handleSend` 对下一句输入的解释。
+ * `null` 表示不在请假流程中；非 null 表示已收集到的部分信息。
+ */
+let pendingLeaveData: LeaveCollectedData | null = null
+
+/**
  * 回一句学期追问（不发任何请求、不打 pending 长等待）。
  *
  * 与真实查询的区别：追问是本地同步产生的，写完立即解除 pending，
@@ -219,6 +241,38 @@ function replyWithScores(semester: string | undefined) {
   })
 }
 
+/**
+ * 真实请假提交。
+ *
+ * 收尾机制与 `replyWithExams` / `replyWithCourses` / `replyWithScores` 完全一致。
+ */
+function replyWithLeave(data: LeaveCollectedData) {
+  const controller = new AbortController()
+  inFlightController = controller
+
+  const beforeCount = conversationStore.messages.filter(
+    (message) => message.role === 'assistant',
+  ).length
+
+  const stopWatch = watch(
+    () =>
+      conversationStore.messages.filter((message) => message.role === 'assistant').length >
+      beforeCount,
+    (arrived) => {
+      if (!arrived) return
+      stopWatch()
+      pending.value = false
+      pendingLeaveData = null
+      nextTick(() => inputRef.value?.focus())
+    },
+  )
+
+  void submitLeave(data, controller.signal).then((payload) => {
+    if (!shouldRenderLeaveReply(payload)) return
+    conversationStore.appendMessage(toLeaveAssistantMessage(payload))
+  })
+}
+
 function handleSend(text: string) {
   if (pending.value) return
 
@@ -247,6 +301,27 @@ function handleSend(text: string) {
     pendingScoreSemester = false
   }
 
+  // —— 请假槽位：上一轮在等补充信息时，本轮输入优先按「补请假信息」解释 ——
+  if (pendingLeaveData) {
+    const updated = parseLeaveInput(text, pendingLeaveData)
+    if (isLeaveComplete(updated)) {
+      pendingLeaveData = null
+      replyWithLeave(updated)
+      return
+    }
+    if (isLeaveQuery(text)) {
+      pendingLeaveData = updated
+      const followup = getLeaveFollowup(updated)
+      if (followup) {
+        conversationStore.addMessage('assistant', followup)
+        pending.value = false
+        inputRef.value?.focus()
+        return
+      }
+    }
+    pendingLeaveData = null
+  }
+
   // —— 成绩分流在最前：「考试成绩 / 期末成绩」问的是分数，不是考场安排 ——
   // 没给学期（也没明确说全部）就不发请求，只回一句追问等下一轮补齐
   if (isScoreQuery(text)) {
@@ -262,6 +337,24 @@ function handleSend(text: string) {
     pendingScoreSemester = true
     askScoreSemester()
     return
+  }
+
+  // —— 请假分流：用户要请假，先尝试从输入里解析日期和事由 ——
+  if (isLeaveQuery(text)) {
+    const data = parseLeaveInput(text, {})
+    if (isLeaveComplete(data)) {
+      replyWithLeave(data)
+      return
+    }
+    pendingLeaveData = data
+    const followup = getLeaveFollowup(data)
+    if (followup) {
+      conversationStore.addMessage('assistant', followup)
+      pending.value = false
+      inputRef.value?.focus()
+      return
+    }
+    pendingLeaveData = null
   }
 
   if (isExamQuery(text)) {
@@ -287,6 +380,7 @@ function handleSelectPrompt(question: string) {
 
 function handleNewConversation() {
   pendingScoreSemester = false
+  pendingLeaveData = null
   conversationStore.createConversation()
   inputRef.value?.focus()
 }
@@ -296,6 +390,7 @@ function handleClearConversation() {
   inFlightController?.abort()
   inFlightController = null
   pendingScoreSemester = false
+  pendingLeaveData = null
   pending.value = false
   conversationStore.clearCurrentConversation()
   inputRef.value?.focus()
@@ -321,6 +416,7 @@ if (import.meta.env.DEV) {
   debugTarget.__campusFlowExamQuery = runExamQuery
   debugTarget.__campusFlowCourseQuery = runCourseQuery
   debugTarget.__campusFlowScoreQuery = runScoreQuery
+  debugTarget.__campusFlowLeaveQuery = submitLeave
 }
 </script>
 
