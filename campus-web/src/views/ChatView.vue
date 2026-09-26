@@ -2,18 +2,28 @@
 /**
  * 聊天主页：侧边栏 + 消息区 + 输入区。
  *
- * F3 起数据流分成三条（保持 F2 的组件拆分与 store 结构不变）：
- *   1. **考试安排**（真实链路，F3-1）：
+ * F3 起数据流分成四条（保持 F2 的组件拆分与 store 结构不变）：
+ *   1. **成绩**（真实链路，F3-3）：
+ *      发送 → store 写入 user 消息 → 从输入解析学期（「2025-2026-1」或
+ *      「2025-2026 第一学期」）；**没给学期就不发请求**，只回一句追问，
+ *      等用户下一轮补上（或明确说「全部」查所有学期）→
+ *      调用 Spring Boot `GET /api/scores` → 真实返回数据写入 assistant 消息。
+ *   2. **考试安排**（真实链路，F3-1）：
  *      发送 → store 写入 user 消息 → 调用 Spring Boot `GET /api/exams`
  *      → 真实返回数据写入 assistant 消息；失败则写入明确的失败提示，绝不编造数据。
- *   2. **课程表**（真实链路，F3-2）：
+ *   3. **课程表**（真实链路，F3-2）：
  *      发送 → store 写入 user 消息 → 从输入抽取周次（「查看第3周课程」→ 3；
  *      抽不到 = 未指定，查整学期）→ 调用 Spring Boot `GET /api/courses`
  *      → 真实返回数据写入 assistant 消息；失败同样只写明确提示。
- *   3. 其它问题（仍是本地占位）：
+ *   4. 其它问题（仍是本地占位）：
  *      发送 → store 写入 user 消息 → 本地占位回复写入 assistant 消息（标注「占位」）。
  *
- * 这里是「页面编排」层：布局、窄屏抽屉、发送流程、三条分支的分流、滚动跟随。
+ * 分流顺序：**成绩在最前**——「考试成绩 / 期末成绩」里的「成绩 / 分数」
+ * 指的是分数而非考场安排，必须进成绩分支；纯考试问题（考试安排 / 什么时候考）
+ * 不含成绩词，F3-1 行为分毫不改。考试与课程分支的代码保持原样。
+ *
+ * 这里是「页面编排」层：布局、窄屏抽屉、发送流程、四条分支的分流、
+ * 成绩学期槽位、滚动跟随。
  */
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -24,6 +34,7 @@ import ChatMessage from '@/components/chat/ChatMessage.vue'
 import WelcomePanel from '@/components/chat/WelcomePanel.vue'
 import { isCourseQuery, parseCourseWeek } from '@/constants/courseIntent'
 import { isExamQuery } from '@/constants/examIntent'
+import { isScoreQuery, parseSemester, wantsAllSemesters } from '@/constants/scoreIntent'
 import {
   runCourseQuery,
   shouldRenderReply as shouldRenderCourseReply,
@@ -31,7 +42,13 @@ import {
 } from '@/lib/courseFlow'
 import { shouldRenderReply, toAssistantMessage } from '@/lib/examFlow'
 import { runExamQuery } from '@/lib/examFlow'
-import { MOCK_REPLY_DELAY_MS, buildMockReply } from '@/lib/mockReply'
+import { buildMockReply, MOCK_REPLY_DELAY_MS } from '@/lib/mockReply'
+import {
+  runScoreQuery,
+  SCORE_SEMESTER_FOLLOWUP,
+  shouldRenderReply as shouldRenderScoreReply,
+  toAssistantMessage as toScoreAssistantMessage,
+} from '@/lib/scoreFlow'
 import { useConversationStore } from '@/stores/conversation'
 
 const conversationStore = useConversationStore()
@@ -147,11 +164,105 @@ function replyWithCourses(week: number | undefined) {
   })
 }
 
+/**
+ * 成绩学期的「任务槽位」：上一轮成绩问题没带学期、正在等用户补。
+ *
+ * 这是前端本地的最小实现（Python Agent 的 `task_slot` 不动）：
+ * 槽位只在本组件存活，且**不渲染任何 UI**——它的存在只影响
+ * `handleSend` 对下一句输入的解释。新建 / 清空会话时一并复位，
+ * 避免把「上一场对话欠的学期」带进新上下文。
+ */
+let pendingScoreSemester = false
+
+/**
+ * 回一句学期追问（不发任何请求、不打 pending 长等待）。
+ *
+ * 与真实查询的区别：追问是本地同步产生的，写完立即解除 pending，
+ * 用户补学期后由 `handleSend` 的槽位分支发起真正请求。
+ */
+function askScoreSemester() {
+  conversationStore.addMessage('assistant', SCORE_SEMESTER_FOLLOWUP)
+  pending.value = false
+  inputRef.value?.focus()
+}
+
+/**
+ * 真实成绩查询。
+ *
+ * 收尾机制与 `replyWithExams` / `replyWithCourses` 完全一致（观察 assistant
+ * 消息数量变化来解除 pending），差异只有一点：**入口带显式的学期参数**——
+ * 字符串 = 只查该学期；undefined = 用户明确选择「全部」，查所有学期。
+ */
+function replyWithScores(semester: string | undefined) {
+  const controller = new AbortController()
+  inFlightController = controller
+
+  const beforeCount = conversationStore.messages.filter(
+    (message) => message.role === 'assistant',
+  ).length
+
+  const stopWatch = watch(
+    () =>
+      conversationStore.messages.filter((message) => message.role === 'assistant').length >
+      beforeCount,
+    (arrived) => {
+      if (!arrived) return
+      stopWatch()
+      pending.value = false
+      nextTick(() => inputRef.value?.focus())
+    },
+  )
+
+  void runScoreQuery(semester, controller.signal).then((payload) => {
+    if (!shouldRenderScoreReply(payload)) return
+    conversationStore.appendMessage(toScoreAssistantMessage(payload))
+  })
+}
+
 function handleSend(text: string) {
   if (pending.value) return
 
   conversationStore.addMessage('user', text)
   pending.value = true
+
+  // —— 成绩槽位：上一轮在等学期时，本轮输入优先按「补学期」解释 ——
+  // 补上了（或明确说「全部」）就查；还在问成绩但没给学期就再问一次；
+  // 问的是别的事就放弃槽位、走正常分流（不让一个旧追问劫持新问题）。
+  if (pendingScoreSemester) {
+    const followedUpSemester = parseSemester(text)
+    if (followedUpSemester !== undefined) {
+      pendingScoreSemester = false
+      replyWithScores(followedUpSemester)
+      return
+    }
+    if (wantsAllSemesters(text)) {
+      pendingScoreSemester = false
+      replyWithScores(undefined)
+      return
+    }
+    if (isScoreQuery(text)) {
+      askScoreSemester()
+      return
+    }
+    pendingScoreSemester = false
+  }
+
+  // —— 成绩分流在最前：「考试成绩 / 期末成绩」问的是分数，不是考场安排 ——
+  // 没给学期（也没明确说全部）就不发请求，只回一句追问等下一轮补齐
+  if (isScoreQuery(text)) {
+    const semester = parseSemester(text)
+    if (semester !== undefined) {
+      replyWithScores(semester)
+      return
+    }
+    if (wantsAllSemesters(text)) {
+      replyWithScores(undefined)
+      return
+    }
+    pendingScoreSemester = true
+    askScoreSemester()
+    return
+  }
 
   if (isExamQuery(text)) {
     replyWithExams()
@@ -175,6 +286,7 @@ function handleSelectPrompt(question: string) {
 }
 
 function handleNewConversation() {
+  pendingScoreSemester = false
   conversationStore.createConversation()
   inputRef.value?.focus()
 }
@@ -183,6 +295,7 @@ function handleNewConversation() {
 function handleClearConversation() {
   inFlightController?.abort()
   inFlightController = null
+  pendingScoreSemester = false
   pending.value = false
   conversationStore.clearCurrentConversation()
   inputRef.value?.focus()
@@ -207,6 +320,7 @@ if (import.meta.env.DEV) {
   debugTarget.__campusFlowConversationStore = conversationStore
   debugTarget.__campusFlowExamQuery = runExamQuery
   debugTarget.__campusFlowCourseQuery = runCourseQuery
+  debugTarget.__campusFlowScoreQuery = runScoreQuery
 }
 </script>
 
