@@ -4,12 +4,22 @@ version = "0.1.0"
 description = "智校园 CampusFlow —— 基于 LangGraph + MCP 的高校智能事务 Agent 平台"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "httpx>=0.28,<1.0",
     "langchain>=1.4,<2.0",
     "langchain-chroma>=1.1.0",
     "langchain-core>=1.6,<2.0",
     "langchain-openai>=1.6,<2.0",
     "langchain-text-splitters>=1.1.2",
     "langgraph>=1.2,<2.0",
+    # 显式直接依赖：SQLite 检查点后端（app/agent/graph/checkpoint_sqlite.py 直接 import）。
+    # langgraph-checkpoint 本体只含 base/memory/serde，**不含 sqlite**，必须单独声明；
+    # 默认后端仍是 memory，装它是为了让 CHECKPOINTER_BACKEND=sqlite 能跨进程续上会话。
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    # 显式直接依赖：Dataset 同步模块（app/rag/evaluation/langsmith_dataset.py）
+    # 直接 import 官方 SDK；虽然它随 langchain 间接装上，但「用到就声明」——
+    # 让依赖清单说清真实用途，也避免上游哪天不再代装。
+    "langsmith>=0.14,<1.0",
+    "mcp>=2.2.0",
     "pypdf>=6.19.0",
     "python-dotenv>=1.2,<2.0",
 ]

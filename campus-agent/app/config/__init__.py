@@ -1,0 +1,43 @@
+"""配置包：统一收口应用运行参数与敏感信息读取。"""
+
+from app.config.settings import (
+    AppSettings,
+    CampusApiSettings,
+    CampusCalendarSettings,
+    ConfigurationError,
+    EmbeddingSettings,
+    LLMSettings,
+    LangSmithSettings,
+    MCPSettings,
+    RAGSettings,
+    app_root,
+    apply_langsmith_tracing,
+    get_campus_api_settings,
+    get_campus_calendar_settings,
+    get_langsmith_settings,
+    get_mcp_settings,
+    get_rag_settings,
+    get_settings,
+    load_environment,
+)
+
+__all__ = [
+    "AppSettings",
+    "CampusApiSettings",
+    "CampusCalendarSettings",
+    "ConfigurationError",
+    "EmbeddingSettings",
+    "LLMSettings",
+    "LangSmithSettings",
+    "MCPSettings",
+    "RAGSettings",
+    "app_root",
+    "apply_langsmith_tracing",
+    "get_campus_api_settings",
+    "get_campus_calendar_settings",
+    "get_langsmith_settings",
+    "get_mcp_settings",
+    "get_rag_settings",
+    "get_settings",
+    "load_environment",
+]

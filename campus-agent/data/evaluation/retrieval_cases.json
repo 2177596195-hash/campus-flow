@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "description": "CampusFlow 检索评估数据集（人工维护的标准答案）。expected_sources 为空数组表示负样本：该问题本就不该命中知识库。来源路径相对 data/knowledge/ 目录。expected_min_score 为可选的相关性下限，用于分数标定回归检查（当前配置实测：正样本命中分数 ≥ 0.58，负样本最高 0.35，故 0.5 是安全下限）。",
+  "cases": [
+    {
+      "case_id": "library-hours",
+      "question": "图书馆开放时间是怎么规定的？",
+      "expected_sources": ["campus_rules.md"],
+      "expected_keywords": ["开放时间", "22:00"],
+      "expected_min_score": 0.5
+    },
+    {
+      "case_id": "book-limit",
+      "question": "本科生一次最多能借多少本书，借期是多久？",
+      "expected_sources": ["campus_rules.md"],
+      "expected_keywords": ["借书上限", "续借"]
+    },
+    {
+      "case_id": "scholarship-conditions",
+      "question": "综合奖学金的评定条件是什么？",
+      "expected_sources": ["campus_rules.md"],
+      "expected_keywords": ["综合素质测评", "75"]
+    },
+    {
+      "case_id": "makeup-vs-deferred",
+      "question": "缓考和补考在成绩记载上有什么区别？",
+      "expected_sources": ["campus_rules.md"],
+      "expected_keywords": ["缓考", "补考"]
+    },
+    {
+      "case_id": "campus-card-loss",
+      "question": "校园卡遗失以后怎么挂失和补办？",
+      "expected_sources": ["campus_faq.txt"],
+      "expected_keywords": ["挂失", "补办"],
+      "expected_min_score": 0.5
+    },
+    {
+      "case_id": "dorm-network-fee",
+      "question": "宿舍区的校园网一学期要交多少钱？",
+      "expected_sources": ["campus_faq.txt"],
+      "expected_keywords": ["信息费", "60"]
+    },
+    {
+      "case_id": "medical-reimbursement",
+      "question": "在校外看病的费用怎么报销？",
+      "expected_sources": ["campus_faq.txt"],
+      "expected_keywords": ["转诊单", "报销"]
+    },
+    {
+      "case_id": "gym-hours",
+      "question": "体育馆的开放时间是怎样的？",
+      "expected_sources": ["campus_sports.pdf"],
+      "expected_keywords": ["gymnasium", "22:00"],
+      "expected_min_score": 0.5
+    },
+    {
+      "case_id": "pool-schedule",
+      "question": "游泳馆什么时候开放，周一开放吗？",
+      "expected_sources": ["campus_sports.pdf"],
+      "expected_keywords": ["swimming pool", "Monday"]
+    },
+    {
+      "case_id": "sports-booking",
+      "question": "校内的球场和训练室需要提前预约吗？",
+      "expected_sources": ["campus_sports.pdf"],
+      "expected_keywords": ["reserve", "90 minutes"]
+    },
+    {
+      "case_id": "library-and-gym-hours",
+      "question": "图书馆和体育馆的开放时间分别是什么？",
+      "expected_sources": ["campus_rules.md", "campus_sports.pdf"],
+      "expected_keywords": ["开放时间", "gymnasium"]
+    },
+    {
+      "case_id": "card-fee-vs-overdue-fine",
+      "question": "校园卡补办的工本费和图书逾期的违约金分别是多少？",
+      "expected_sources": ["campus_faq.txt", "campus_rules.md"],
+      "expected_keywords": ["工本费", "违约金"]
+    },
+    {
+      "case_id": "off-topic-weather",
+      "question": "今天北京的天气怎么样，需要带伞吗？",
+      "expected_sources": []
+    },
+    {
+      "case_id": "off-topic-music",
+      "question": "推荐几首适合跑步时听的歌。",
+      "expected_sources": []
+    },
+    {
+      "case_id": "off-topic-canteen",
+      "question": "学校食堂三楼的麻辣香锅多少钱一份？",
+      "expected_sources": []
+    }
+  ]
+}

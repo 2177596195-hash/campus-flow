@@ -1,0 +1,34 @@
+# 集成测试专用配置（profile: test）
+#
+# 与生产配置的差别只有两点：
+#   1. 库换成 campus_test，避免测试数据污染业务库；
+#   2. 表结构不由应用创建（ddl-auto=none / sql.init 关闭）。
+#      表结构由 sql/init-database.sql + schema.sql 一次性建好，
+#      测试自身通过 @Transactional 回滚来保证互不干扰，
+#      从而完全避免「多份 Spring 上下文各自 create-drop 同一张表」造成的相互破坏。
+#
+# 前置条件：本机 MySQL 可用，且已执行
+#   mysql -u root -p < campus-service/sql/init-database.sql
+#   mysql -u root -p campus_test < campus-service/src/main/resources/schema.sql
+# 连接口令通过环境变量 MYSQL_PASSWORD 传入，不写入任何文件。
+
+spring:
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_TEST_DATABASE:campus_test}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+
+  sql:
+    init:
+      mode: never
+
+logging:
+  level:
+    root: WARN
+    edu.ylu.campus: INFO
+    org.hibernate.SQL: WARN

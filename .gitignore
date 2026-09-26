@@ -15,9 +15,10 @@ env/
 # Agent 工作区数据（记忆、技能等本地数据，不入库）
 .workbuddy/
 
-# Environment variables
+# Environment variables（只忽略真实配置；上面的 .env.* 会连模板一起忽略，故显式放行）
 .env
 .env.*
+!.env.example
 
 # Python tools
 .pytest_cache/
@@ -36,3 +37,10 @@ Thumbs.db
 
 # 向量库本地持久化目录（可由 python main.py --ingest 重建）
 .storage/
+
+# Java / Maven 构建产物（campus-service 编译输出，可由 mvn 重建）
+target/
+
+# pytest 临时目录（跑测试时 --basetemp 指向工作区内目录产生）
+.pytest-tmp/
+

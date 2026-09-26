@@ -1,0 +1,46 @@
+server:
+  # 端口可由环境变量覆盖：CampusFlow 默认 8080；若本机 8080 已被占用，
+  # 用 SERVER_PORT=8081 启动，并在 Python 侧同步设置 CAMPUS_SERVICE_BASE_URL。
+  port: ${SERVER_PORT:8080}
+  # 只监听回环地址：本阶段服务仅供本机 Agent 调用，不对外网暴露。
+  address: 127.0.0.1
+
+spring:
+  application:
+    name: campus-service
+
+  datasource:
+    # 连接信息全部来自环境变量，代码与配置文件中不出现任何明文口令。
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:campus}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 5
+      pool-name: campus-pool
+
+  jpa:
+    hibernate:
+      # 表结构由 sql/schema.sql 显式维护，不让 Hibernate 擅自改库。
+      ddl-auto: none
+    # 关闭 OSIV：查询在 Service 的事务内完成，不让持久化上下文泄漏到视图层。
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: false
+
+  sql:
+    # schema.sql / data.sql 均为幂等语句（CREATE TABLE IF NOT EXISTS + INSERT IGNORE），
+    # 因此可以每次启动都执行，不需要 Flyway 之类的迁移组件。
+    init:
+      mode: always
+      encoding: UTF-8
+
+  jackson:
+    default-property-inclusion: non_null
+
+logging:
+  level:
+    root: INFO
+    edu.ylu.campus: INFO
