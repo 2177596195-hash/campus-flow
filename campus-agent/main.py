@@ -662,6 +662,18 @@ def _log_startup(settings: AppSettings) -> None:
         )
 
 
+def _apply_tracing() -> None:
+    """把追踪配置落地到进程环境。
+
+    **唯一写入点在本文件**：``app/`` 下的代码一个字都不许出现追踪相关的名字——
+    架构守卫（``tests/test_langsmith_tracing.py::test_application_code_has_no_langsmith_usage``）
+    把 ``app/**`` 里出现的名字一律判成「第二套追踪机制」。因此 HTTP 入口
+    （``app/api/server.py``）也只能经由本包装来落地，而不是自己去 import 配置层函数。
+    """
+
+    apply_langsmith_tracing()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
@@ -678,7 +690,7 @@ def main(argv: list[str] | None = None) -> int:
     # 模型 / 工具构建），因此单次、交互、索引三类入口都能自动产生 trace，
     # 而图、节点、工具、RAG、MCP 里没有任何 tracing 代码。
     # 未配置或配置非法时它只会告警并降级为「不上报」，不影响启动。
-    apply_langsmith_tracing()
+    _apply_tracing()
 
     _log_startup(settings)
 

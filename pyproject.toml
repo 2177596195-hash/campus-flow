@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "智校园 CampusFlow —— 基于 LangGraph + MCP 的高校智能事务 Agent 平台"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    # Agent HTTP 入口（app/api/server.py）：最小 Web 框架 + ASGI 服务器。
+    # 只在启动 ``python -m app.api.server`` 时用到，CLI 入口不 import 它们，
+    # 因此不增加 CLI 启动开销；但作为「项目用到的就声明」原则，仍写进主依赖。
+    "fastapi>=0.115,<1.0",
     "httpx>=0.28,<1.0",
     "langchain>=1.4,<2.0",
     "langchain-chroma>=1.1.0",
@@ -22,6 +26,9 @@ dependencies = [
     "mcp>=2.2.0",
     "pypdf>=6.19.0",
     "python-dotenv>=1.2,<2.0",
+    # FastAPI 的 ASGI 运行服务器。只用标准 ``uvicorn.run()`` 启动方式，
+    # 不引入 gunicorn 等生产级方案（本阶段只在开发 / 联调用）。
+    "uvicorn>=0.34,<1.0",
 ]
 
 [dependency-groups]

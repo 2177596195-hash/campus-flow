@@ -2,32 +2,24 @@
 /**
  * 聊天主页：侧边栏 + 消息区 + 输入区。
  *
- * F3 起数据流分成五条（保持 F2 的组件拆分与 store 结构不变）：
- *   1. **成绩**（真实链路，F3-3）：
- *      发送 → store 写入 user 消息 → 从输入解析学期（「2025-2026-1」或
- *      「2025-2026 第一学期」）；**没给学期就不发请求**，只回一句追问，
- *      等用户下一轮补上（或明确说「全部」查所有学期）→
- *      调用 Spring Boot `GET /api/scores` → 真实返回数据写入 assistant 消息。
- *   2. **考试安排**（真实链路，F3-1）：
+ * F4 起数据流更新（成绩分支走 Agent）：
+ *   1. **成绩**（Agent 链路，F4-1）：
+ *      发送 → store 写入 user 消息 → 调用 Agent POST /api/agent/chat
+ *      → Agent 内部完成意图识别、学期槽位填充、工具调用、自然语言生成
+ *      → 前端展示 Agent 回复。多轮对话靠 threadId 维持（Agent checkpointer 管理状态）。
+ *      **Agent 失败时回退** F3 的直连链路（`dispatchF3Score`），并按 network /
+ *      http / malformed / timeout 区分失败原因——绝不把失败当成成功展示。
+ *   2. **考试安排**（真实链路，F3-1，不变）：
  *      发送 → store 写入 user 消息 → 调用 Spring Boot `GET /api/exams`
- *      → 真实返回数据写入 assistant 消息；失败则写入明确的失败提示，绝不编造数据。
- *   3. **课程表**（真实链路，F3-2）：
- *      发送 → store 写入 user 消息 → 从输入抽取周次（「查看第3周课程」→ 3；
- *      抽不到 = 未指定，查整学期）→ 调用 Spring Boot `GET /api/courses`
- *      → 真实返回数据写入 assistant 消息；失败同样只写明确提示。
- *   4. **请假申请**（真实链路，F3-4）：
- *      发送 → store 写入 user 消息 → 从输入解析起止时间和事由；
- *      **信息不全就不发请求**，按 startTime → endTime → reason 顺序追问，
- *      等用户补齐后 → 调用 Spring Boot `POST /api/leaves` → 201 成功或明确失败。
+ *   3. **课程表**（真实链路，F3-2，不变）：
+ *      发送 → store 写入 user 消息 → 调用 Spring Boot `GET /api/courses`
+ *   4. **请假申请**（真实链路，F3-4，不变）：
+ *      发送 → store 写入 user 消息 → 调用 Spring Boot `POST /api/leaves`
  *   5. 其它问题（仍是本地占位）：
- *      发送 → store 写入 user 消息 → 本地占位回复写入 assistant 消息（标注「占位」）。
+ *      发送 → store 写入 user 消息 → 本地占位回复。
  *
  * 分流顺序：**成绩在最前**——「考试成绩 / 期末成绩」里的「成绩 / 分数」
- * 指的是分数而非考场安排，必须进成绩分支；请假在成绩之后、考试之前；
- * 考试与课程分支的代码保持原样。
- *
- * 这里是「页面编排」层：布局、窄屏抽屉、发送流程、四条分支的分流、
- * 成绩学期槽位、滚动跟随。
+ * 指的是分数而非考场安排，必须进成绩分支。
  */
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -36,6 +28,11 @@ import AppSidebar from '@/components/sidebar/AppSidebar.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
 import WelcomePanel from '@/components/chat/WelcomePanel.vue'
+import {
+  runAgentScoreChat,
+  shouldRenderAgentReply,
+  toAgentAssistantMessage,
+} from '@/lib/agentScoreFlow'
 import { isCourseQuery, parseCourseWeek } from '@/constants/courseIntent'
 import { isExamQuery } from '@/constants/examIntent'
 import { isLeaveQuery } from '@/constants/leaveIntent'
@@ -189,6 +186,29 @@ function replyWithCourses(week: number | undefined) {
 let pendingScoreSemester = false
 
 /**
+ * F4 的 Agent 会话标识（**只在本组件实例存活期内有效**）。
+ *
+ * 生命周期规则（刻意从简：不用全局变量、不做持久化）：
+ * - 第一次调用 Agent 时**不传** threadId，由 Agent 自动生成并在响应里回传；
+ * - 拿到之后存在这里，之后每一次成绩相关的 Agent 请求都原样带回，
+ *   Agent 的 checkpointer 据此加载同一会话状态，「追问学期 → 补齐 → 查询」
+ *   这个多轮流程才能跨请求接上；
+ * - 新建 / 清空会话时复位为 ``null``：那是另一个上下文，
+ *   不该继承上一场的会话状态（否则 Agent 会把上一个会话的待办槽位认成本轮的）。
+ */
+let agentThreadId: string | null = null
+
+/**
+ * 「Agent 正在等用户补学期」的本地槽位。
+ *
+ * 与 `pendingScoreSemester`（F3 槽位）同形但**不同链路**：F3 槽位在前端解析学期，
+ * 本槽位只记录「上一轮 Agent 反问了学期」，本轮输入**原样转发**给 Agent 解释——
+ * 「上学期 / 本学期」这类相对说法要靠 Agent 的教务日历，前端没有日历，猜了就是编造。
+ * 只在本组件存活，不渲染任何 UI；新建 / 清空会话时一并复位。
+ */
+let pendingAgentSemester = false
+
+/**
  * 请假流程的「任务槽位」：正在收集请假信息（startTime / endTime / reason）。
  *
  * 与成绩学期槽位同理：槽位只在本组件存活，影响 `handleSend` 对下一句输入的解释。
@@ -242,6 +262,95 @@ function replyWithScores(semester: string | undefined) {
 }
 
 /**
+ * F3 成绩分支的原始分流逻辑（**原样保留**，F4 起兼任 Agent 的回退链路）。
+ *
+ * 规则未改动：明确写了学期就按学期查、明确说「全部」就查全部，
+ * 两者都没有就只回一句追问并挂上槽位（不猜学期）。
+ * 抽成函数只是为了被两处复用（成绩主分支的「全部」例外、Agent 失败后的回退），
+ * 行为与 F3-3 完全一致。
+ */
+function dispatchF3Score(text: string) {
+  const semester = parseSemester(text)
+  if (semester !== undefined) {
+    replyWithScores(semester)
+    return
+  }
+  if (wantsAllSemesters(text)) {
+    replyWithScores(undefined)
+    return
+  }
+  pendingScoreSemester = true
+  askScoreSemester()
+}
+
+/** 当前会话里 assistant 消息条数（真实链路的统一完成信号） */
+function countAssistantMessages(): number {
+  return conversationStore.messages.filter((message) => message.role === 'assistant').length
+}
+
+/**
+ * F4 成绩主链路：优先走 Agent，失败时回退 F3 直连链路。
+ *
+ * 完成信号仍是「assistant 消息数量变化」，但这里有个不同：**由谁写下这条消息
+ * 是不确定的**——Agent 成功时是 Agent 自己，失败回退时是 F3 链路。
+ * 因此 Agent 失败后**不在这里解除 pending**，交给 F3 那一步自己的完成信号解除；
+ * 否则 loading 会先消失、而结果还没到（用户会以为请求没反应）。
+ *
+ * 失败必须可区分：分类来自 `runAgentScoreChat` 的 `failureKind`
+ * （network / http / malformed / timeout），文案来自 api 层
+ * （「无法连接 Agent 服务」/「服务返回异常（HTTP xxx）」/「返回内容不是合法
+ * JSON」/「请求超时」）。分类只记进开发期控制台——屏幕上出现的是 F3 的
+ * **真实结果或真实失败**，绝不会把 Agent 的失败当作成功渲染。
+ */
+function replyWithAgentScore(text: string) {
+  const controller = new AbortController()
+  inFlightController = controller
+
+  const beforeCount = countAssistantMessages()
+  const stopWatch = watch(
+    () => countAssistantMessages() > beforeCount,
+    (arrived) => {
+      if (!arrived) return
+      stopWatch()
+      pending.value = false
+      nextTick(() => inputRef.value?.focus())
+    },
+  )
+
+  void runAgentScoreChat(text, agentThreadId ?? undefined, controller.signal).then(
+    ({ reply, threadId, failureKind }) => {
+      if (threadId) agentThreadId = threadId
+
+      // 被取消（清空会话 / 离开页面）：空载荷不上屏，也不触发回退
+      if (!reply.error && !shouldRenderAgentReply(reply)) {
+        stopWatch()
+        pending.value = false
+        return
+      }
+
+      // —— Agent 成功：只展示 Agent 的回复 ——
+      if (!reply.error) {
+        conversationStore.appendMessage(toAgentAssistantMessage(reply))
+        return
+      }
+
+      // —— Agent 失败：按类型记录，然后回退 F3 直连链路把同一件事做完 ——
+      // 回退意味着这条会话改由 F3 承担：Agent 的学期槽位就地放弃，
+      // 后面若 F3 再追问学期，由 F3 自己的槽位（pendingScoreSemester）接手。
+      pendingAgentSemester = false
+      if (import.meta.env.DEV) {
+        console.warn('[F4] Agent 成绩链路失败，回退 F3 直连链路', {
+          kind: failureKind ?? 'unknown',
+          message: reply.content,
+        })
+      }
+      stopWatch()
+      dispatchF3Score(text)
+    },
+  )
+}
+
+/**
  * 真实请假提交。
  *
  * 收尾机制与 `replyWithExams` / `replyWithCourses` / `replyWithScores` 完全一致。
@@ -272,6 +381,32 @@ function replyWithLeave(data: LeaveCollectedData) {
     conversationStore.appendMessage(toLeaveAssistantMessage(payload))
   })
 }
+
+/**
+ * 切换会话即换上下文：Agent 会话标识与「等学期」槽位一起复位。
+ *
+ * 为什么需要这个 watch：会话除了在「新对话 / 清空」按钮里变，还能被侧边栏
+ * 直接切走（`store.selectConversation`）。漏掉那条路径的话，新会话的第一句
+ * 「帮我查成绩」会带着**上一场**的 threadId 发出去，Agent 会把上一场没做完的
+ * 任务当成这一轮的语境——那是最隐蔽的一类多轮串味。
+ * 清空会话不改变 currentConversationId，所以它那两条路径仍显式复位（见下）。
+ *
+ * **为什么必须忽略 `previous === null` 这一次变化**（实测踩到的坑）：
+ * 本条会话的第一条消息会走 `store.addMessage` → `upsertCurrentConversation`，
+ * 也就是「没有会话 → 新建一个会话」，`currentConversationId` 会从 null 变成新 id。
+ * 那不是用户在切会话，而是**本条消息自己开了会话**；若在这里复位，
+ * 刚在 `handleSend` 里挂上的「等 Agent 反问学期」槽位会被立刻清掉，
+ * 第二轮补学期就会掉进 mock 回复分支（第一版实现正是如此，靠真实浏览器验证才发现）。
+ */
+watch(
+  () => conversationStore.currentConversationId,
+  (current, previous) => {
+    if (previous === null || previous === undefined) return // 首条消息自建会话，不算切换
+    if (current === previous) return
+    agentThreadId = null
+    pendingAgentSemester = false
+  },
+)
 
 function handleSend(text: string) {
   if (pending.value) return
@@ -322,20 +457,48 @@ function handleSend(text: string) {
     pendingLeaveData = null
   }
 
+  // —— Agent 学期槽位：上一轮 Agent 反问了学期，本轮输入优先按「补学期」解释 ——
+  // 与 F3 槽位的区别：前端**不解析**这句话，原样转发给 Agent——
+  // 「上学期 / 本学期」要靠 Agent 的教务日历，前端猜了就是编造。
+  // 只有「用户明显换去问别的事」（考试 / 课程 / 请假）才放弃等待、走正常分流，
+  // 否则「一个旧追问劫持新问题」的老毛病就会回来。
+  //
+  // 位置说明：刻意排在 F3 的**两个槽位分支之后**、各业务分流之前。
+  // 一是「槽位都在分流之前处理」这条既有结构不变；
+  // 二是 F3 分支之间的相对顺序（成绩 → 请假 → 考试 → 课程）分毫未动——
+  // F3-4 的源码契约用例正是按首次出现位置核对这个顺序的，这里不能去动它。
+  if (pendingAgentSemester) {
+    if (isExamQuery(text) || isCourseQuery(text) || isLeaveQuery(text)) {
+      pendingAgentSemester = false
+    } else if (wantsAllSemesters(text)) {
+      // 「全部学期」交给 F3（与成绩主分支同一取舍，理由见那里）
+      pendingAgentSemester = false
+      dispatchF3Score(text)
+      return
+    } else {
+      // 写出了具体学期就解除等待；否则（例如用户又问了一遍成绩）继续等
+      if (parseSemester(text) !== undefined) pendingAgentSemester = false
+      replyWithAgentScore(text)
+      return
+    }
+  }
+
   // —— 成绩分流在最前：「考试成绩 / 期末成绩」问的是分数，不是考场安排 ——
-  // 没给学期（也没明确说全部）就不发请求，只回一句追问等下一轮补齐
+  // F4：优先走 Agent（Agent 负责意图识别、学期追问、工具调用与自然语言生成），
+  // 失败时由 replyWithAgentScore 回退 F3 直连链路（dispatchF3Score）。
   if (isScoreQuery(text)) {
-    const semester = parseSemester(text)
-    if (semester !== undefined) {
-      replyWithScores(semester)
-      return
-    }
+    // 例外：「全部 / 所有学期」直接走 F3。Agent 的学期槽位只认「写出来的学年 +
+    // 学期号」（见 app/agent/slots.py），没有「全部学期」这个说法；而 F3 的接口层
+    // 本来就支持「不带 semester = 查全部」。交给能回答这条问题的链路，
+    // 比让 Agent 反复追问更诚实——这条分支不新增行为，就是 F3 原本的做法。
     if (wantsAllSemesters(text)) {
-      replyWithScores(undefined)
+      dispatchF3Score(text)
       return
     }
-    pendingScoreSemester = true
-    askScoreSemester()
+    // 没写出具体学期（也没说「全部」）→ Agent 大概率会反问学期：挂上槽位，
+    // 下一轮输入才会被当成「补学期」交给同一个 Agent 会话
+    pendingAgentSemester = parseSemester(text) === undefined
+    replyWithAgentScore(text)
     return
   }
 
@@ -381,6 +544,10 @@ function handleSelectPrompt(question: string) {
 function handleNewConversation() {
   pendingScoreSemester = false
   pendingLeaveData = null
+  // 新会话 = 新上下文：不复用上一场的 Agent 会话（`createConversation` 可能
+  // 复用「当前空会话」，那时 currentConversationId 不变、上面那个 watch 不会触发）
+  agentThreadId = null
+  pendingAgentSemester = false
   conversationStore.createConversation()
   inputRef.value?.focus()
 }
@@ -391,6 +558,8 @@ function handleClearConversation() {
   inFlightController = null
   pendingScoreSemester = false
   pendingLeaveData = null
+  agentThreadId = null
+  pendingAgentSemester = false
   pending.value = false
   conversationStore.clearCurrentConversation()
   inputRef.value?.focus()
@@ -409,6 +578,10 @@ onBeforeUnmount(() => {
  * 调试入口（仅开发环境）：把 store 挂到 window，方便在控制台验证
  * 「新建对话 / 添加消息 / 重置」这些本轮被要求的操作。
  * F3 追加：把真实查询入口也挂上去，便于不点按钮就验证接口链路。
+ * F4 追加：Agent 成绩链路入口 + **当前 threadId 的读取口**——
+ *   threadId 是本组件内部的 ``let``，从外部读不到，而「第二轮是否复用同一个
+ *   threadId」正是 F4 要验证的关键事实，因此开一个只读的取值函数（仍非全局变量，
+ *   只是把已有的局部状态暴露给开发期控制台）。
  */
 if (import.meta.env.DEV) {
   const debugTarget = window as unknown as Record<string, unknown>
@@ -417,6 +590,8 @@ if (import.meta.env.DEV) {
   debugTarget.__campusFlowCourseQuery = runCourseQuery
   debugTarget.__campusFlowScoreQuery = runScoreQuery
   debugTarget.__campusFlowLeaveQuery = submitLeave
+  debugTarget.__campusFlowAgentScoreChat = runAgentScoreChat
+  debugTarget.__campusFlowAgentThreadId = () => agentThreadId
 }
 </script>
 

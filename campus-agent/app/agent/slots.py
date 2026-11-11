@@ -3,7 +3,7 @@
 本模块只回答三件事，而且都是**纯函数**、确定性、可离线断言：
 
 1. 「这句话说的是哪个学期」——把用户口语（``本学期`` / ``上学期`` /
-   ``2024-2025-2``）落成一个具体学期串；
+   ``2024-2025-2`` / ``2024-2025第一学期``）落成一个具体学期串；
 2. 「这轮请求缺哪个槽位」——当前登记了两个场景：**成绩查询没有指定学期**、
    **请假申请没有给出起止时间与事由**；
 3. 「上一轮补齐的槽位值该怎么交给模型」——把值渲染成一句任务上下文。
@@ -79,6 +79,20 @@ _LEAVE_VALUE_PREFIX: Final[str] = f"{SLOT_LEAVE}:"
 #: 前后用 ``(?<!\d)`` / ``(?!\d)`` 卡住，避免把 ``2025-2026-12`` 之类的串
 #: 截出一个「看着合法」的学期——宁可判不出，也不要把错值当成用户本意。
 SEMESTER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?<!\d)(\d{4})-(\d{4})-([12])(?!\d)")
+
+#: 中文写法的学期：``2025-2026第一学期`` / ``2025至2026学年第二学期`` /
+#: ``2025-2026 第 1 学期``（年份分隔符与「学年 / 第」都可省略、可带空格）。
+#:
+#: 补这条的理由：Agent 追问学期时给用户的示例就是「形如 2025-2026-1 的具体学期」，
+#: 但用户自然会说成中文写法。补上它之后，``resolve_semester`` 能把同一句话
+#: 归一化成后端格式；**依然不做任何猜测**——正则要求两个 4 位年份 + 明确的学期号，
+#: 「大二第一学期」「上学期」这类没有年份的说法仍然判不出（后者由关键词分支处理）。
+SEMESTER_CHINESE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?<!\d)(\d{4})\s*[-—–至到~/]?\s*(\d{4})\s*(?:学年\s*)?(?:第\s*)?([一二12])\s*学期"
+)
+
+#: 中文学期序号 -> 后端数字序号
+SEMESTER_TERM_NUMBER: Final[dict[str, str]] = {"一": "1", "二": "2", "1": "1", "2": "2"}
 
 #: 「本学期」这类口语
 CURRENT_SEMESTER_KEYWORDS: Final[tuple[str, ...]] = (
@@ -202,14 +216,31 @@ def _semester_parts(value: str) -> tuple[int, int, int] | None:
 def parse_semester(text: str) -> str | None:
     """从文本里抽出**显式**学期串（形如 ``2025-2026-1``）。
 
+    接受两种写法，都要求用户**明确写出学年与学期号**：
+
+    - 后端格式：``2025-2026-1``；
+    - 中文写法：``2025-2026第一学期`` / ``2025至2026学年第二学期``（见
+      :data:`SEMESTER_CHINESE_PATTERN`）。
+
     判不出或格式不自洽（如 ``2025-2030-1``）时返回 ``None``——
     「没听出来」比「猜一个」安全，调用方据此可以继续追问。
+    字面量写法优先：一句话里两种写法同时出现时取字面量那一个。
     """
 
-    match = SEMESTER_PATTERN.search(text or "")
-    if match is None:
+    normalized = text or ""
+
+    match = SEMESTER_PATTERN.search(normalized)
+    if match is not None:
+        candidate = match.group(0)
+        return candidate if _semester_parts(candidate) is not None else None
+
+    chinese = SEMESTER_CHINESE_PATTERN.search(normalized)
+    if chinese is None:
         return None
-    candidate = match.group(0)
+    term = SEMESTER_TERM_NUMBER.get(chinese.group(3))
+    if term is None:  # 理论上正则已限定取值，保留兜底以免将来放宽正则时静默出错
+        return None
+    candidate = f"{chinese.group(1)}-{chinese.group(2)}-{term}"
     return candidate if _semester_parts(candidate) is not None else None
 
 
@@ -437,7 +468,9 @@ __all__ = [
     "PREVIOUS_SEMESTER_KEYWORDS",
     "SCORE_KEYWORDS",
     "SCORE_QUERY_INTENT",
+    "SEMESTER_CHINESE_PATTERN",
     "SEMESTER_PATTERN",
+    "SEMESTER_TERM_NUMBER",
     "SLOT_LEAVE",
     "SLOT_SEMESTER",
     "TASK_SLOT_NAMES",

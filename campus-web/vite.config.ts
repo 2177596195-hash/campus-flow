@@ -15,6 +15,15 @@ import vue from '@vitejs/plugin-vue'
  */
 const CAMPUS_API_TARGET = process.env.CAMPUS_API_TARGET ?? 'http://127.0.0.1:8080'
 
+/**
+ * Agent 服务地址：**仅 Vite 开发服务器使用**。
+ *
+ * Python Agent（FastAPI）默认监听 8000 端口（见 `app/api/server.py`）。
+ * `/api/agent` 前缀的请求走这条代理到 Agent 服务；其余 `/api` 仍走 Spring Boot。
+ * 代理目标可用 `AGENT_API_TARGET` 环境变量覆盖。
+ */
+const AGENT_API_TARGET = process.env.AGENT_API_TARGET ?? 'http://127.0.0.1:8000'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
@@ -26,17 +35,23 @@ export default defineConfig({
   server: {
     port: 5173,
     /**
-     * 把 `/api` 反代到 Spring Boot —— 这是绕开 CORS 的关键：
-     * 后端只监听回环地址且没有任何 CORS 配置，浏览器直接请求它会被拦
-     * （实测 `net::ERR_FAILED`）。改为浏览器请求同源的 `/api/...`，
-     * 由开发服务器在 Node 侧转发，请求就不再有跨源属性。
+     * 反代规则（绕开 CORS 的关键）：
+     * - `/api/agent/*` → Python Agent 服务（FastAPI，默认 8000 端口）
+     * - `/api/*`（其余）→ Spring Boot 业务服务（默认 8080 端口）
      *
-     * 注意代理目标用**主机名 `localhost`** 而不是写死的 `127.0.0.1`：
-     * 本机后端在 IPv6 回环上的表现更稳定（Node 侧 `localhost` 会按需回落到
-     * IPv4）。若要指定 IPv4，请显式写 `http://127.0.0.1:<port>`。
+     * 后端都只监听回环地址且没有 CORS 配置，浏览器直接请求会被拦
+     * （实测 `net::ERR_FAILED`）。改为同源 `/api/...`，由开发服务器在
+     * Node 侧转发，请求就不再有跨源属性。
+     *
      * 生产环境应由网关 / 反向代理承担同样的同源暴露职责。
      */
     proxy: {
+      // Agent 服务（Python FastAPI）：更具体的路径在前，优先匹配
+      '/api/agent': {
+        target: AGENT_API_TARGET,
+        changeOrigin: true,
+      },
+      // Spring Boot 业务服务：兜底匹配其余 /api 路径
       '/api': {
         target: CAMPUS_API_TARGET,
         changeOrigin: true,

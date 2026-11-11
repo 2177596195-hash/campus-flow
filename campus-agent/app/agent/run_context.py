@@ -52,10 +52,12 @@ RUN_NAME: Final[str] = "campus-flow.turn"
 #: 项目标识。tag 与 metadata 各出现一份：前者用于筛选，后者用于展示
 PROJECT_NAME: Final[str] = "campus-flow"
 
-#: 运行入口 tag 前缀与取值（同一进程内两种入口：单次提问 / 交互模式）
+#: 运行入口 tag 前缀与取值（同一进程内多种入口：单次提问 / 交互模式 / HTTP）
 ENTRYPOINT_TAG_PREFIX: Final[str] = "entry:"
 ENTRYPOINT_CLI_SINGLE: Final[str] = "cli-single"
 ENTRYPOINT_CLI_REPL: Final[str] = "cli-repl"
+#: FastAPI HTTP 入口（app/api/server.py）：前端经 Spring Boot 转发过来的请求走这里
+ENTRYPOINT_HTTP: Final[str] = "http"
 
 #: 意图 tag 前缀。合法取值直接由意图契约派生，不再维护第二份清单
 INTENT_TAG_PREFIX: Final[str] = "intent:"
@@ -153,6 +155,7 @@ def annotate_intent(
 __all__ = [
     "ENTRYPOINT_CLI_REPL",
     "ENTRYPOINT_CLI_SINGLE",
+    "ENTRYPOINT_HTTP",
     "ENTRYPOINT_TAG_PREFIX",
     "INTENT_TAGS",
     "INTENT_TAG_PREFIX",
